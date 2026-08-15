@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Infilect AI Pipeline — Product Detection &amp; Grouping</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --border: #262b36;
+    --text: #e7e9ee;
+    --muted: #9aa3b2;
+    --accent: #4f8cff;
+    --accent-2: #35c98f;
+    --danger: #ff5c5c;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 32px 16px 64px;
+  }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  header { margin-bottom: 24px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  p.sub { color: var(--muted); margin: 0; font-size: 0.95rem; }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+
+  .dropzone {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 32px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .dropzone.drag { border-color: var(--accent); background: rgba(79,140,255,0.06); }
+  .dropzone input { display: none; }
+  .dropzone .hint { color: var(--muted); font-size: 0.85rem; margin-top: 6px; }
+
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 0.95rem;
+    cursor: pointer;
+    margin-top: 14px;
+  }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .preview { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 20px; }
+  .preview img { max-width: 100%; border-radius: 8px; border: 1px solid var(--border); }
+  .preview .col { flex: 1; min-width: 280px; }
+  .preview h3 { font-size: 0.9rem; color: var(--muted); margin: 0 0 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin: 16px 0; }
+  .stat { background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; min-width: 120px; }
+  .stat .n { font-size: 1.3rem; font-weight: 700; }
+  .stat .l { font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; }
+
+  pre#json-out {
+    background: #0b0d12;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    max-height: 360px;
+    overflow: auto;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .error { color: var(--danger); margin-top: 10px; font-size: 0.9rem; }
+  .spinner { display:inline-block; width:14px; height:14px; border:2px solid rgba(255,255,255,0.3); border-top-color:#fff; border-radius:50%; animation: spin 0.7s linear infinite; margin-right:8px; vertical-align:-2px;}
+  @keyframes spin { to { transform: rotate(360deg); } }
+  footer { color: var(--muted); font-size: 0.8rem; margin-top: 30px; text-align: center; }
+  code { background: rgba(255,255,255,0.06); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Retail Shelf AI Pipeline</h1>
+    <p class="sub">Upload a shelf image → product detection → brand grouping → JSON + visualization</p>
+  </header>
+
+  <div class="card">
+    <div class="dropzone" id="dropzone">
+      <div id="dz-label">Click to choose an image, or drag one here</div>
+      <div class="hint">JPG, PNG, BMP, or WEBP — up to 15MB</div>
+      <input type="file" id="file-input" accept="image/*">
+    </div>
+    <button id="analyze-btn" disabled>Analyze image</button>
+    <div class="error" id="error-box" style="display:none;"></div>
+  </div>
+
+  <div class="card" id="results-card" style="display:none;">
+    <div class="stats" id="stats"></div>
+    <div class="preview">
+      <div class="col">
+        <h3>Original</h3>
+        <img id="orig-img" alt="original upload">
+      </div>
+      <div class="col">
+        <h3>Detected &amp; grouped (color = brand group)</h3>
+        <img id="vis-img" alt="visualization">
+      </div>
+    </div>
+    <h3 style="color:var(--muted); font-size:0.85rem; margin-top:20px;">Raw JSON response</h3>
+    <pre id="json-out"></pre>
+  </div>
+
+  <footer> Retail Shelf AI Pipeline — Product Detection & Brand Groupingdemo. Images are processed in memory and only the annotated result is written to disk (<code>static/outputs/</code>).</footer>
+</div>
+
+<script>
+const dropzone = document.getElementById('dropzone');
+const fileInput = document.getElementById('file-input');
+const analyzeBtn = document.getElementById('analyze-btn');
+const errorBox = document.getElementById('error-box');
+const resultsCard = document.getElementById('results-card');
+const origImg = document.getElementById('orig-img');
+const visImg = document.getElementById('vis-img');
+const statsEl = document.getElementById('stats');
+const jsonOut = document.getElementById('json-out');
+const dzLabel = document.getElementById('dz-label');
+
+let selectedFile = null;
+
+dropzone.addEventListener('click', () => fileInput.click());
+['dragenter', 'dragover'].forEach(evt =>
+  dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.add('drag'); })
+);
+['dragleave', 'drop'].forEach(evt =>
+  dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.remove('drag'); })
+);
+dropzone.addEventListener('drop', e => {
+  if (e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
+});
+fileInput.addEventListener('change', e => {
+  if (e.target.files.length) setFile(e.target.files[0]);
+});
+
+function setFile(file) {
+  selectedFile = file;
+  dzLabel.textContent = `Selected: ${file.name}`;
+  analyzeBtn.disabled = false;
+  errorBox.style.display = 'none';
+}
+
+analyzeBtn.addEventListener('click', async () => {
+  if (!selectedFile) return;
+  errorBox.style.display = 'none';
+  analyzeBtn.disabled = true;
+  analyzeBtn.innerHTML = '<span class="spinner"></span>Analyzing…';
+
+  origImg.src = URL.createObjectURL(selectedFile);
+
+  const formData = new FormData();
+  formData.append('image', selectedFile);
+
+  try {
+    const res = await fetch('/api/analyze', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || `Request failed with status ${res.status}`);
+    }
+    renderResults(data);
+  } catch (err) {
+    errorBox.textContent = 'Error: ' + err.message;
+    errorBox.style.display = 'block';
+  } finally {
+    analyzeBtn.disabled = false;
+    analyzeBtn.textContent = 'Analyze image';
+  }
+});
+
+function renderResults(data) {
+  resultsCard.style.display = 'block';
+  statsEl.innerHTML = `
+    <div class="stat"><div class="n">${data.num_products_detected ?? 0}</div><div class="l">Products detected</div></div>
+    <div class="stat"><div class="n">${data.num_groups ?? 0}</div><div class="l">Brand groups</div></div>
+    <div class="stat"><div class="n">${data.total_processing_time_ms ?? '—'}ms</div><div class="l">Total latency</div></div>
+  `;
+  if (data.visualization_url) {
+    visImg.src = data.visualization_url + '?t=' + Date.now();
+  }
+  jsonOut.textContent = JSON.stringify(data, null, 2);
+}
+</script>
+</body>
+</html>
